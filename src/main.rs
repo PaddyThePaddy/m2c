@@ -9,12 +9,14 @@ use std::{
 
 use anyhow::Context;
 use clap::Parser;
+use git_version::git_version;
 use regex::Regex;
 use tracing::{info, warn};
 use tree_sitter::{Node, TreeCursor};
 use which::which;
 
 #[derive(Debug, clap::Parser)]
+#[command(version=git_version!())]
 struct Cli {
     make_path: Option<PathBuf>,
     #[arg(default_value = "compile_commands.json")]
