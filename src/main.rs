@@ -16,9 +16,11 @@ use which::which;
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
-    make_path: PathBuf,
+    make_path: Option<PathBuf>,
     #[arg(default_value = "compile_commands.json")]
     compile_units: PathBuf,
+    #[arg(short, long)]
+    stdin: bool,
 }
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -26,7 +28,22 @@ fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
     let args = Cli::parse();
-    let units = make_to_compile_units(args.make_path.as_path())?;
+
+    let make_path = if args.stdin {
+        let mut path_s = String::new();
+        std::io::stdin().read_line(&mut path_s)?;
+        PathBuf::from(path_s.trim())
+    } else {
+        if let Some(p) = &args.make_path {
+            p.clone()
+        } else {
+            return Err(anyhow::anyhow!(
+                "<make_file> path is required unless --stdin flag is set"
+            ));
+        }
+    };
+
+    let units = make_to_compile_units(make_path.as_path())?;
     let mut units_map = HashMap::new();
     if args.compile_units.exists() {
         let current_units: Vec<CompilationUnit> =
