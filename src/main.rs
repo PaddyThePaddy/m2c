@@ -11,7 +11,7 @@ use anyhow::Context;
 use clap::Parser;
 use git_version::git_version;
 use regex::Regex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tree_sitter::{Node, TreeCursor};
 use which::which;
 
@@ -23,13 +23,22 @@ struct Cli {
     compile_units: PathBuf,
     #[arg(short, long)]
     stdin: bool,
+    #[arg(short, long)]
+    warn_dup: bool,
+    #[arg(short, long)]
+    verbose: bool,
 }
 fn main() -> anyhow::Result<()> {
+    let args = Cli::parse();
     tracing_subscriber::fmt()
         .without_time()
         .with_target(false)
+        .with_max_level(if args.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
         .init();
-    let args = Cli::parse();
 
     let make_path = if args.stdin {
         let mut path_s = String::new();
@@ -60,7 +69,7 @@ fn main() -> anyhow::Result<()> {
     }
     info!("Merging {} new units", units.len());
     for unit in units {
-        if units_map.contains_key(&unit.file) {
+        if args.warn_dup && units_map.contains_key(&unit.file) {
             warn!(
                 "{} duplicated in compile_commands.json",
                 unit.file.display()
@@ -80,6 +89,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn make_to_compile_units(p: impl AsRef<Path>) -> anyhow::Result<Vec<CompilationUnit>> {
+    debug!("Parsing {}", p.as_ref().display());
     let org_make_content = read_to_string(p.as_ref())?;
     let make_content = nmake_preprocess(&org_make_content)?;
     let make_content = patch_error_syntax(&make_content);
