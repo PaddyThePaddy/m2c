@@ -57,8 +57,10 @@ fn main() -> anyhow::Result<()> {
     let units = make_to_compile_units(make_path.as_path())?;
     let mut units_map = HashMap::new();
     if args.compile_units.exists() {
-        let current_units: Vec<CompilationUnit> =
-            serde_json::from_reader(std::fs::File::open(args.compile_units.as_path())?)?;
+        let current_units: Vec<CompilationUnit> = serde_json::from_reader(
+            std::fs::File::open(args.compile_units.as_path())
+                .context(format!("Opening {}", args.compile_units.display()))?,
+        )?;
         for unit in current_units {
             units_map.insert(unit.file.clone(), unit);
         }
@@ -83,7 +85,11 @@ fn main() -> anyhow::Result<()> {
         .create(true)
         .write(true)
         .truncate(true)
-        .open(args.compile_units.as_path())?;
+        .open(args.compile_units.as_path())
+        .context(format!(
+            "Opening {} for write",
+            args.compile_units.display()
+        ))?;
     serde_json::to_writer_pretty(new_json_file, &new_units)?;
     Ok(())
 }
@@ -151,6 +157,7 @@ struct CompilationUnit {
 
 #[derive(Debug)]
 struct MakeRecipes {
+    #[allow(dead_code)]
     var_dict: HashMap<String, String>,
     recipes: HashMap<String, Vec<String>>,
     depex_dict: HashMap<String, HashSet<String>>,
@@ -203,14 +210,18 @@ impl MakeRecipes {
                         );
                     }
                     if let Some(depex) = depex {
-                        let depex = solve_reference(&depex, &var_dict)?;
-                        if let Some(cur_depex) = depex_dict.get_mut(&target) {
-                            cur_depex.extend(depex.split_whitespace().map(|s| s.to_string()));
-                        } else {
-                            depex_dict.insert(
-                                target.clone(),
-                                HashSet::from_iter(depex.split_whitespace().map(|s| s.to_string())),
-                            );
+                        for target in target.split_whitespace() {
+                            let depex = solve_reference(&depex, &var_dict)?;
+                            if let Some(cur_depex) = depex_dict.get_mut(target) {
+                                cur_depex.extend(depex.split_whitespace().map(|s| s.to_string()));
+                            } else {
+                                depex_dict.insert(
+                                    target.to_string(),
+                                    HashSet::from_iter(
+                                        depex.split_whitespace().map(|s| s.to_string()),
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -238,40 +249,46 @@ impl MakeRecipes {
     fn generate_compilation_units(&self) -> anyhow::Result<Vec<CompilationUnit>> {
         let mut units = vec![];
 
-        for (target, commands) in self.recipes.iter() {
-            if !target.ends_with(".obj") {
-                continue;
-            }
-            let depex_set = if let Some(set) = self.depex_dict.get(target) {
-                set
-            } else {
-                continue;
-            };
-            for depex in depex_set.iter() {
-                if !(depex.ends_with(".c") || depex.ends_with(".cpp")) {
+        for (targets, commands) in self.recipes.iter() {
+            for target in targets.split_whitespace() {
+                dbg!(target);
+                if !target.ends_with(".obj") {
                     continue;
                 }
-
-                for cmd in commands {
-                    let mut arguments =
-                        comma::parse_command(cmd).context("Not able to parse command arguments")?;
-                    if !Path::new(&arguments[0]).is_absolute() {
-                        let exec = which(arguments[0].as_str())
-                            .context(format!("Could not get absolute path for {}", arguments[0]))?;
-                        arguments[0] = exec
-                            .as_os_str()
-                            .to_str()
-                            .context("Exectuable path contains non utf8 character")?
-                            .to_string();
+                let depex_set = if let Some(set) = self.depex_dict.get(target) {
+                    set
+                } else {
+                    continue;
+                };
+                for depex in depex_set.iter() {
+                    if !(depex.ends_with(".c") || depex.ends_with(".cpp")) {
+                        continue;
                     }
 
-                    let comp_unit = CompilationUnit {
-                        directory: std::env::current_dir().context("Cound not get current dir")?,
-                        file: PathBuf::from(depex),
-                        output: Some(PathBuf::from(target)),
-                        arguments,
-                    };
-                    units.push(comp_unit);
+                    for cmd in commands {
+                        let mut arguments = comma::parse_command(&cmd.replace("\\", "/"))
+                            .context("Not able to parse command arguments")?;
+                        if !Path::new(&arguments[0]).is_absolute() {
+                            let exec = which(arguments[0].as_str()).context(format!(
+                                "Could not get absolute path for {}",
+                                arguments[0]
+                            ))?;
+                            arguments[0] = exec
+                                .as_os_str()
+                                .to_str()
+                                .context("Exectuable path contains non utf8 character")?
+                                .to_string();
+                        }
+
+                        let comp_unit = CompilationUnit {
+                            directory: std::env::current_dir()
+                                .context("Cound not get current dir")?,
+                            file: PathBuf::from(depex),
+                            output: Some(PathBuf::from(target)),
+                            arguments,
+                        };
+                        units.push(comp_unit);
+                    }
                 }
             }
         }
@@ -283,25 +300,31 @@ impl MakeRecipes {
 static INCLUDE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)!INCLUDE\s+<?(.+)>?").expect("Construct regex failed"));
 fn nmake_preprocess(src: &str) -> anyhow::Result<Cow<str>> {
-    let mut new_str = String::new();
-    let mut prev_end = 0;
+    /// Variable could be used to form the include path
+    /// But at this point we haven't parse variable yet.
+    /// TODO:
+    /// Need to overhual the enture parse flow in oder to support
+    /// !INCLUDE directive
 
-    for cap in INCLUDE_PATTERN.captures_iter(src) {
-        let inc_path = cap.get(1).context("Unable to get capture group")?;
-        let inc_content = std::fs::read_to_string(inc_path.as_str())?;
-        new_str.push_str(&src[prev_end..cap.get(0).unwrap().start()]);
-        new_str.push('\n');
-        new_str.push_str(&inc_content);
-        new_str.push('\n');
-        prev_end = cap.get(0).unwrap().end();
-    }
-    if prev_end == 0 {
-        Ok(Cow::Borrowed(src))
-    } else {
-        new_str.push_str(&src[prev_end..]);
-        Ok(Cow::Owned(new_str))
-    }
-    //Ok(INCLUDE_PATTERN.replace_all(src, "#$0"))
+    //     let mut new_str = String::new();
+    //     let mut prev_end = 0;
+    //
+    //     for cap in INCLUDE_PATTERN.captures_iter(src) {
+    //         let inc_path = cap.get(1).context("Unable to get capture group")?;
+    //         let inc_content = std::fs::read_to_string(inc_path.as_str()).context(format!("Opening {}", inc_path.as_str()))?;
+    //         new_str.push_str(&src[prev_end..cap.get(0).unwrap().start()]);
+    //         new_str.push('\n');
+    //         new_str.push_str(&inc_content);
+    //         new_str.push('\n');
+    //         prev_end = cap.get(0).unwrap().end();
+    //     }
+    //     if prev_end == 0 {
+    //         Ok(Cow::Borrowed(src))
+    //     } else {
+    //         new_str.push_str(&src[prev_end..]);
+    //         Ok(Cow::Owned(new_str))
+    //     }
+    Ok(INCLUDE_PATTERN.replace_all(src, "#$0"))
 }
 
 static VARIABLE_ASSIGNMENT_PATTERN: LazyLock<Regex> =
@@ -361,8 +384,9 @@ fn patch_error_syntax(src: &str) -> Cow<str> {
     }
 }
 
-static NEWLINE_ESC_SEQ_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\\\n\s*").expect("Not able to construct regex pattern"));
+static NEWLINE_ESC_SEQ_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\\r\n\s*|\\\n\s*").expect("Not able to construct regex pattern")
+});
 static ESC_SEQ_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\\([\(\)"\\])"#).expect("Not able to construct regex pattern"));
 fn unescape_str<'a>(src: &'a str) -> String {
