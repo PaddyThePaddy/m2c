@@ -251,7 +251,6 @@ impl MakeRecipes {
 
         for (targets, commands) in self.recipes.iter() {
             for target in targets.split_whitespace() {
-                dbg!(target);
                 if !target.ends_with(".obj") {
                     continue;
                 }
@@ -300,11 +299,11 @@ impl MakeRecipes {
 static INCLUDE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)!INCLUDE\s+<?(.+)>?").expect("Construct regex failed"));
 fn nmake_preprocess(src: &str) -> anyhow::Result<Cow<str>> {
-    /// Variable could be used to form the include path
-    /// But at this point we haven't parse variable yet.
-    /// TODO:
-    /// Need to overhual the enture parse flow in oder to support
-    /// !INCLUDE directive
+    // Variable could be used to form the include path
+    // But at this point we haven't parse variable yet.
+    // TODO:
+    // Need to overhual the enture parse flow in oder to support
+    // !INCLUDE directive
 
     //     let mut new_str = String::new();
     //     let mut prev_end = 0;
