@@ -103,7 +103,8 @@ fn make_to_compile_units(p: impl AsRef<Path>) -> anyhow::Result<Vec<CompilationU
     let mut units = vec![];
     if let Some(gen_lib_cmds) = make.recipes.get("gen_libs") {
         for cmd in gen_lib_cmds {
-            let components = if let Some(comp) = comma::parse_command(cmd) {
+            let cmd = cmd.replace("\\", "\\\\");
+            let components = if let Some(comp) = comma::parse_command(&cmd) {
                 comp
             } else {
                 continue;
