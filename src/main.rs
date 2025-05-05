@@ -11,7 +11,6 @@ use anyhow::Context;
 use clap::Parser;
 use git_version::git_version;
 use regex::Regex;
-use tracing::{debug, info, warn};
 use tree_sitter::{Node, TreeCursor};
 use which::which;
 
@@ -25,20 +24,9 @@ struct Cli {
     stdin: bool,
     #[arg(short, long)]
     warn_dup: bool,
-    #[arg(short, long)]
-    verbose: bool,
 }
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
-    tracing_subscriber::fmt()
-        .without_time()
-        .with_target(false)
-        .with_max_level(if args.verbose {
-            tracing::Level::DEBUG
-        } else {
-            tracing::Level::INFO
-        })
-        .init();
 
     let make_path = if args.stdin {
         let mut path_s = String::new();
@@ -64,15 +52,15 @@ fn main() -> anyhow::Result<()> {
         for unit in current_units {
             units_map.insert(unit.file.clone(), unit);
         }
-        info!(
+        println!(
             "Got {} units from current compile_commands.json",
             units_map.len()
         );
     }
-    info!("Merging {} new units", units.len());
+    println!("Merging {} new units", units.len());
     for unit in units {
         if args.warn_dup && units_map.contains_key(&unit.file) {
-            warn!(
+            println!(
                 "{} duplicated in compile_commands.json",
                 unit.file.display()
             );
@@ -80,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         units_map.insert(unit.file.clone(), unit);
     }
     let new_units: Vec<CompilationUnit> = units_map.into_values().collect();
-    info!("Writing {} units", new_units.len());
+    println!("Writing {} units", new_units.len());
     let new_json_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -95,7 +83,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn make_to_compile_units(p: impl AsRef<Path>) -> anyhow::Result<Vec<CompilationUnit>> {
-    debug!("Parsing {}", p.as_ref().display());
+    println!("Parsing {}", p.as_ref().display());
     let org_make_content = read_to_string(p.as_ref())?;
     let make_content = nmake_preprocess(&org_make_content)?;
     let make_content = patch_error_syntax(&make_content);
