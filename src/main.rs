@@ -142,7 +142,7 @@ fn make_to_compile_units(p: impl AsRef<Path>, process_history: &mut HashSet<Path
 
     let comp_units = make.generate_compilation_units()?;
     process_history.insert(p.as_ref().to_path_buf());
-    units.extend(comp_units.into_iter());
+    units.extend(comp_units);
     Ok(units)
 }
 
@@ -407,7 +407,7 @@ static NEWLINE_ESC_SEQ_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 });
 static ESC_SEQ_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\\([\(\)"\\])"#).expect("Not able to construct regex pattern"));
-fn unescape_str<'a>(src: &'a str) -> String {
+fn unescape_str(src: & str) -> String {
     let str = NEWLINE_ESC_SEQ_PATTERN.replace_all(src, " ");
     let str = ESC_SEQ_PATTERN.replace_all(&str, "$1");
     str.to_string()
@@ -447,7 +447,7 @@ fn parse_rule_node<'a>(
     };
 
     let mut prereq = String::new();
-    while let Some(node) = walker.next() {
+    for node in walker.by_ref() {
         if node.kind() == "prerequisites" {
             prereq.push_str(node.utf8_text(src.as_bytes())?);
         } else if node.kind() == "recipe" {
@@ -456,7 +456,7 @@ fn parse_rule_node<'a>(
     }
 
     let mut commands = vec![];
-    while let Some(node) = walker.next() {
+    for node in walker {
         if node.kind() == "shell_text" {
             let cmd = node.utf8_text(src.as_bytes())?;
             commands.push(unescape_str(cmd).to_string());
@@ -512,7 +512,7 @@ impl<'c> Iterator for TsWalker<'c> {
             return Some(node);
         }
         self.end = true;
-        return Some(node);
+        Some(node)
     }
 }
 
