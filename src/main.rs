@@ -22,27 +22,53 @@ struct Cli {
     compile_units: PathBuf,
     #[arg(short, long)]
     stdin: bool,
-    #[arg(short, long)]
+    #[arg(long)]
     warn_dup: bool,
+    #[arg(short, long)]
+    walk_dir: Option<PathBuf>,
 }
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
-    let make_path = if args.stdin {
+    let make_paths = if args.stdin {
         let mut path_s = String::new();
         std::io::stdin().read_line(&mut path_s)?;
-        PathBuf::from(path_s.trim())
+        vec![PathBuf::from(path_s.trim())]
+    } else if let Some(dir) = &args.walk_dir {
+        let cwd = std::env::current_dir()?;
+        walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|f| {
+                let f = f.ok()?;
+                if !f.file_type().is_file() {
+                    return None;
+                }
+                let path = f.path();
+                if path.file_name() == Some(OsStr::new("Makefile"))
+                    || path.file_name() == Some(OsStr::new("GNUmakefile"))
+                {
+                    return if path.is_absolute() {
+                        Some(path.to_path_buf())
+                    } else {
+                        Some(cwd.join(path))
+                    }
+                }
+                None
+            })
+            .collect()
+    } else if let Some(p) = args.make_path {
+        vec![p.clone()]
     } else {
-        if let Some(p) = &args.make_path {
-            p.clone()
-        } else {
-            return Err(anyhow::anyhow!(
-                "<make_file> path is required unless --stdin flag is set"
-            ));
-        }
+        return Err(anyhow::anyhow!(
+            "<make_file> path is required unless --stdin or --walk_dir flag is set"
+        ));
     };
 
-    let units = make_to_compile_units(make_path.as_path())?;
+    let mut units = HashSet::new();
+    let mut process_history = HashSet::new();
+    for make in make_paths {
+        units.extend(make_to_compile_units(make, &mut process_history)?);
+    }
     let mut units_map = HashMap::new();
     if args.compile_units.exists() {
         let current_units: Vec<CompilationUnit> = serde_json::from_reader(
@@ -82,7 +108,10 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn make_to_compile_units(p: impl AsRef<Path>) -> anyhow::Result<Vec<CompilationUnit>> {
+fn make_to_compile_units(p: impl AsRef<Path>, process_history: &mut HashSet<PathBuf>) -> anyhow::Result<Vec<CompilationUnit>> {
+    if process_history.contains(p.as_ref()){
+        return Ok(vec![]);
+    }
     println!("Parsing {}", p.as_ref().display());
     let org_make_content = read_to_string(p.as_ref())?;
     let make_content = nmake_preprocess(&org_make_content)?;
@@ -104,7 +133,7 @@ fn make_to_compile_units(p: impl AsRef<Path>) -> anyhow::Result<Vec<CompilationU
                         || fp.file_name() == Some(OsStr::new("GNUmakefile"))
                         || fp.file_name() == Some(OsStr::new("Makefile")))
                 {
-                    let lib_units = make_to_compile_units(fp)?;
+                    let lib_units = make_to_compile_units(fp, process_history)?;
                     units.extend(lib_units.into_iter());
                 }
             }
@@ -112,11 +141,12 @@ fn make_to_compile_units(p: impl AsRef<Path>) -> anyhow::Result<Vec<CompilationU
     }
 
     let comp_units = make.generate_compilation_units()?;
+    process_history.insert(p.as_ref().to_path_buf());
     units.extend(comp_units.into_iter());
     Ok(units)
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, std::hash::Hash, PartialEq, Eq)]
 struct CompilationUnit {
     /// The working directory of the compilation.
     /// All paths specified in the command or file
