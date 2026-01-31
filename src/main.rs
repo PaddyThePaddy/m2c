@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     ffi::OsStr,
+    fmt::Debug,
     fs::read_to_string,
     path::{Path, PathBuf},
     sync::LazyLock,
@@ -11,6 +12,7 @@ use anyhow::Context;
 use clap::Parser;
 use git_version::git_version;
 use regex::Regex;
+use tracing::{debug, info, level_filters::LevelFilter, warn};
 use tree_sitter::{Node, TreeCursor};
 use which::which;
 
@@ -26,9 +28,20 @@ struct Cli {
     warn_dup: bool,
     #[arg(short, long)]
     walk_dir: Option<PathBuf>,
+    #[arg(short, long)]
+    verbose: bool,
 }
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
+    tracing_subscriber::fmt::fmt()
+        .without_time()
+        .with_target(false)
+        .with_max_level(if args.verbose {
+            LevelFilter::DEBUG
+        } else {
+            LevelFilter::INFO
+        })
+        .init();
 
     let make_paths = if args.stdin {
         let mut path_s = String::new();
@@ -51,7 +64,7 @@ fn main() -> anyhow::Result<()> {
                         Some(path.to_path_buf())
                     } else {
                         Some(cwd.join(path))
-                    }
+                    };
                 }
                 None
             })
@@ -64,6 +77,7 @@ fn main() -> anyhow::Result<()> {
         ));
     };
 
+    info!("Start parsing {} makefiles", make_paths.len());
     let mut units = HashSet::new();
     let mut process_history = HashSet::new();
     for make in make_paths {
@@ -78,15 +92,15 @@ fn main() -> anyhow::Result<()> {
         for unit in current_units {
             units_map.insert(unit.file.clone(), unit);
         }
-        println!(
+        info!(
             "Got {} units from current compile_commands.json",
             units_map.len()
         );
     }
-    println!("Merging {} new units", units.len());
+    info!("Merging {} new units", units.len());
     for unit in units {
         if args.warn_dup && units_map.contains_key(&unit.file) {
-            println!(
+            info!(
                 "{} duplicated in compile_commands.json",
                 unit.file.display()
             );
@@ -94,7 +108,7 @@ fn main() -> anyhow::Result<()> {
         units_map.insert(unit.file.clone(), unit);
     }
     let new_units: Vec<CompilationUnit> = units_map.into_values().collect();
-    println!("Writing {} units", new_units.len());
+    info!("Writing {} units", new_units.len());
     let new_json_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -108,11 +122,14 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn make_to_compile_units(p: impl AsRef<Path>, process_history: &mut HashSet<PathBuf>) -> anyhow::Result<Vec<CompilationUnit>> {
-    if process_history.contains(p.as_ref()){
+fn make_to_compile_units(
+    p: impl AsRef<Path>,
+    process_history: &mut HashSet<PathBuf>,
+) -> anyhow::Result<Vec<CompilationUnit>> {
+    if process_history.contains(p.as_ref()) {
         return Ok(vec![]);
     }
-    println!("Parsing {}", p.as_ref().display());
+    debug!("Parsing {}", p.as_ref().display());
     let org_make_content = read_to_string(p.as_ref())?;
     let make_content = nmake_preprocess(&org_make_content)?;
     let make_content = patch_error_syntax(&make_content);
@@ -407,7 +424,7 @@ static NEWLINE_ESC_SEQ_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 });
 static ESC_SEQ_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\\([\(\)"\\])"#).expect("Not able to construct regex pattern"));
-fn unescape_str(src: & str) -> String {
+fn unescape_str(src: &str) -> String {
     let str = NEWLINE_ESC_SEQ_PATTERN.replace_all(src, " ");
     let str = ESC_SEQ_PATTERN.replace_all(&str, "$1");
     str.to_string()
