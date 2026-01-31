@@ -1,3 +1,4 @@
+use core::panic::PanicInfo;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -81,7 +82,10 @@ fn main() -> anyhow::Result<()> {
     let mut units = HashSet::new();
     let mut process_history = HashSet::new();
     for make in make_paths {
-        units.extend(make_to_compile_units(make, &mut process_history)?);
+        match make_to_compile_units(&make, &mut process_history) {
+            Ok(u) => units.extend(u),
+            Err(e) => warn!("Failed at parsing {}: {e}", make.display()),
+        }
     }
     let mut units_map = HashMap::new();
     if args.compile_units.exists() {
