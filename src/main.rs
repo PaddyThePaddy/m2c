@@ -1,4 +1,3 @@
-use core::panic::PanicInfo;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -6,12 +5,13 @@ use std::{
     fmt::Debug,
     fs::read_to_string,
     path::{Path, PathBuf},
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex, RwLock},
 };
 
 use anyhow::Context;
 use clap::Parser;
 use git_version::git_version;
+use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator};
 use regex::Regex;
 use tracing::{debug, info, level_filters::LevelFilter, warn};
 use tree_sitter::{Node, TreeCursor};
@@ -79,14 +79,23 @@ fn main() -> anyhow::Result<()> {
     };
 
     info!("Start parsing {} makefiles", make_paths.len());
-    let mut units = HashSet::new();
-    let mut process_history = HashSet::new();
-    for make in make_paths {
-        match make_to_compile_units(&make, &mut process_history) {
-            Ok(u) => units.extend(u),
+    let units = Mutex::new(HashSet::new());
+    let process_history = Arc::new(RwLock::new(HashSet::new()));
+    // for make in make_paths {
+    //     match make_to_compile_units(&make, &mut process_history) {
+    //         Ok(u) => units.extend(u),
+    //         Err(e) => warn!("Failed at parsing {}: {e}", make.display()),
+    //     }
+    // }
+    make_paths.par_iter().for_each(|make| {
+        match make_to_compile_units(make, process_history.clone()) {
+            Ok(u) => units
+                .lock()
+                .expect("Lock CompilationUnitSet failed")
+                .extend(u),
             Err(e) => warn!("Failed at parsing {}: {e}", make.display()),
         }
-    }
+    });
     let mut units_map = HashMap::new();
     if args.compile_units.exists() {
         let current_units: Vec<CompilationUnit> = serde_json::from_reader(
@@ -101,15 +110,18 @@ fn main() -> anyhow::Result<()> {
             units_map.len()
         );
     }
-    info!("Merging {} new units", units.len());
-    for unit in units {
+    info!(
+        "Merging {} new units",
+        units.lock().expect("Lock CompilationUnitSet failed").len()
+    );
+    for unit in units.lock().expect("Lock CompilationUnitSet failed").iter() {
         if args.warn_dup && units_map.contains_key(&unit.file) {
             info!(
                 "{} duplicated in compile_commands.json",
                 unit.file.display()
             );
         }
-        units_map.insert(unit.file.clone(), unit);
+        units_map.insert(unit.file.clone(), unit.clone());
     }
     let new_units: Vec<CompilationUnit> = units_map.into_values().collect();
     info!("Writing {} units", new_units.len());
@@ -128,9 +140,13 @@ fn main() -> anyhow::Result<()> {
 
 fn make_to_compile_units(
     p: impl AsRef<Path>,
-    process_history: &mut HashSet<PathBuf>,
+    process_history: Arc<RwLock<HashSet<PathBuf>>>,
 ) -> anyhow::Result<Vec<CompilationUnit>> {
-    if process_history.contains(p.as_ref()) {
+    if process_history
+        .read()
+        .expect("Lock process_history")
+        .contains(p.as_ref())
+    {
         return Ok(vec![]);
     }
     debug!("Parsing {}", p.as_ref().display());
@@ -154,7 +170,7 @@ fn make_to_compile_units(
                         || fp.file_name() == Some(OsStr::new("GNUmakefile"))
                         || fp.file_name() == Some(OsStr::new("Makefile")))
                 {
-                    let lib_units = make_to_compile_units(fp, process_history)?;
+                    let lib_units = make_to_compile_units(fp, process_history.clone())?;
                     units.extend(lib_units.into_iter());
                 }
             }
@@ -162,12 +178,15 @@ fn make_to_compile_units(
     }
 
     let comp_units = make.generate_compilation_units()?;
-    process_history.insert(p.as_ref().to_path_buf());
+    process_history
+        .write()
+        .expect("Lock process_history")
+        .insert(p.as_ref().to_path_buf());
     units.extend(comp_units);
     Ok(units)
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, std::hash::Hash, PartialEq, Eq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, std::hash::Hash, PartialEq, Eq, Clone)]
 struct CompilationUnit {
     /// The working directory of the compilation.
     /// All paths specified in the command or file
@@ -338,7 +357,7 @@ impl MakeRecipes {
 
 static INCLUDE_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)!INCLUDE\s+<?(.+)>?").expect("Construct regex failed"));
-fn nmake_preprocess(src: &str) -> anyhow::Result<Cow<str>> {
+fn nmake_preprocess(src: &'_ str) -> anyhow::Result<Cow<'_, str>> {
     // Variable could be used to form the include path
     // But at this point we haven't parse variable yet.
     // TODO:
@@ -370,7 +389,7 @@ static VARIABLE_ASSIGNMENT_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\w+ *= *((\\\n|.)*)").expect("Construct regex failed"));
 static NON_NL_BACKSLASH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\\([^\n\r])").expect("Construct regex failed"));
-fn patch_error_syntax(src: &str) -> Cow<str> {
+fn patch_error_syntax(src: &'_ str) -> Cow<'_, str> {
     let mut insert_back_slash_pos = vec![];
     let escape_chars = ['"', '(', ')'];
     let src = NON_NL_BACKSLASH.replace_all(src, "\\\\$1");
