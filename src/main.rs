@@ -31,8 +31,8 @@ struct Cli {
     walk_dir: Option<PathBuf>,
     #[arg(short, long)]
     verbose: bool,
-    #[arg(short, long)]
-    pretty: bool,
+    #[arg(short('P'), long)]
+    no_pretty: bool,
 }
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
             "Opening {} for write",
             args.compile_units.display()
         ))?;
-    if args.pretty {
+    if !args.no_pretty {
         serde_json::to_writer_pretty(new_json_file, &new_units)?;
     } else {
         serde_json::to_writer(new_json_file, &new_units)?;
