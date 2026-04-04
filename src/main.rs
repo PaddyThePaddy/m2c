@@ -33,6 +33,10 @@ struct Cli {
     verbose: bool,
     #[arg(short('P'), long)]
     no_pretty: bool,
+    #[arg(short, long)]
+    append: bool,
+    #[arg(long)]
+    append_from: Option<PathBuf>,
 }
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
@@ -99,18 +103,25 @@ fn main() -> anyhow::Result<()> {
         }
     });
     let mut units_map = HashMap::new();
-    if args.compile_units.exists() {
-        let current_units: Vec<CompilationUnit> = serde_json::from_reader(
-            std::fs::File::open(args.compile_units.as_path())
-                .context(format!("Opening {}", args.compile_units.display()))?,
-        )?;
-        for unit in current_units {
-            units_map.insert(unit.file.clone(), unit);
+    if args.append {
+        let append_from = if let Some(append_from) = args.append_from.as_ref() {
+            append_from
+        } else {
+            &args.compile_units
+        };
+        if append_from.exists() {
+            let current_units: Vec<CompilationUnit> = serde_json::from_reader(
+                std::fs::File::open(append_from)
+                    .context(format!("Opening {}", args.compile_units.display()))?,
+            )?;
+            for unit in current_units {
+                units_map.insert(unit.file.clone(), unit);
+            }
+            info!(
+                "Got {} units from current compile_commands.json",
+                units_map.len()
+            );
         }
-        info!(
-            "Got {} units from current compile_commands.json",
-            units_map.len()
-        );
     }
     info!(
         "Merging {} new units",
