@@ -63,7 +63,7 @@ Or pass it on the command line:
 clangd --compile-commands-dir=/path/to/dir/containing/json
 ```
 
-## Configuring the Microsoft C/C++ extension (cpptools)
+## VS Code Microsoft C/C++ extension (cpptools)
 
 Open your `settings.json` (`Ctrl+Shift+P` →
 `Preferences: Open User Settings (JSON)`) and set `C_Cpp.default.compileCommands`.
@@ -84,7 +84,7 @@ file at the workspace root, just run **C/C++: Reset IntelliSense Database**
 (or reload the window) to pick up the changes.
 
 
-### VS Code (clangd extension)
+### VS Code clangd extension
 
 1. Install the [`clangd` extension](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd) (`llvm-vs-code-extensions.vscode-clangd`).
 2. Disable Microsoft's C/C++ IntelliSense engine to avoid conflicts, either by
